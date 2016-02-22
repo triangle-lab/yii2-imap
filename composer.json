@@ -19,8 +19,15 @@
             "homepage": "http://traore.ru/"
         }
     ],
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/triangle-lab/yii2-imap"
+        }
+    ],
     "require": {
-        "php": ">=5.4.0"
+        "php": ">=5.4.0",
+        "yiisoft/yii2": "*"
     },
     "autoload": {
         "psr-4": {
