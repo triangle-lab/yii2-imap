@@ -16,22 +16,7 @@ use yii\base\InvalidConfigException;
 class Imap extends Mailbox
 {
     /** @var array */
-    private $_connection = [];    
-
-    /**
-     * @param array
-     * @throws InvalidConfigException on invalid argument.
-     */
-    public function setConnection($connection)
-    {
-        if (!is_array($connection)) {
-            throw new InvalidConfigException(
-                'You should set connection params in your config. Please read yii2-imap doc for more info'
-            );
-        }
-
-        $this->_connection = $connection;
-    }
+    private $_connection = [];
 
     /**
      * @return array
@@ -41,6 +26,20 @@ class Imap extends Mailbox
         $this->_connection = $this->createConnection();
 
         return $this->_connection;
+    }
+
+    /**
+     * @param array
+     *
+     * @throws InvalidConfigException on invalid argument.
+     */
+    public function setConnection($connection)
+    {
+        if (!is_array($connection)) {
+            throw new InvalidConfigException('You should set connection params in your config. Please read yii2-imap doc for more info');
+        }
+
+        $this->_connection = $connection;
     }
 
     /**
@@ -54,6 +53,8 @@ class Imap extends Mailbox
         $this->imapPassword = $this->_connection['imapPassword'];
         $this->serverEncoding = $this->_connection['serverEncoding'];
         $this->attachmentsDir = $this->_connection['attachmentsDir'];
+        $this->attachmentsSubDir = $this->_connection['attachmentsSubDir'];
+        $this->saveFileDataHandler = $this->_connection['saveFileDataHandler'];
 
         if ($this->attachmentsDir) {
             if (!is_dir($this->attachmentsDir)) {

@@ -16,4 +16,19 @@ class IncomingMailAttachment
 
     /** @var string */
     public $filePath;
+
+    /** @var integer */
+    public $size;
+
+    /** @var string */
+    public $contentType;
+
+    /** @var string */
+    public $folder;
+
+    /** @var string */
+    public $extension;
+
+    /** @var string */
+    public $file;
 }

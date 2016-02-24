@@ -76,17 +76,6 @@ class IncomingMail
     }
 
     /**
-     * Get array of internal HTML links placeholders
-     * @return array attachmentId => link placeholder
-     */
-    public function getInternalLinksPlaceholders()
-    {
-        return preg_match_all('/=["\'](ci?d:([\w\.%*@-]+))["\']/i', $this->textHtml, $matches)
-            ? array_combine($matches[2], $matches[1])
-            : [];
-    }
-
-    /**
      * @param string $baseUri
      *
      * @return string
@@ -96,16 +85,21 @@ class IncomingMail
         $baseUri = rtrim($baseUri, '\\/') . '/';
         $fetchedHtml = $this->textHtml;
 
-        foreach($this->getInternalLinksPlaceholders() as $attachmentId => $placeholder) {
+        foreach ($this->getInternalLinksPlaceholders() as $attachmentId => $placeholder) {
             if (isset($this->attachments[$attachmentId])) {
-                $fetchedHtml = str_replace(
-                    $placeholder,
-                    $baseUri . basename($this->attachments[$attachmentId]->filePath),
-                    $fetchedHtml
-                );
+                $fetchedHtml = str_replace($placeholder, $baseUri . basename($this->attachments[$attachmentId]->filePath), $fetchedHtml);
             }
         }
 
         return $fetchedHtml;
+    }
+
+    /**
+     * Get array of internal HTML links placeholders
+     * @return array attachmentId => link placeholder
+     */
+    public function getInternalLinksPlaceholders()
+    {
+        return preg_match_all('/=["\'](ci?d:([\w\.%*@-]+))["\']/i', $this->textHtml, $matches) ? array_combine($matches[2], $matches[1]) : [];
     }
 }

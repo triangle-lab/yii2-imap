@@ -2,8 +2,8 @@
 
 namespace tlab\imap;
 
-use yii\base\Component;
 use stdClass;
+use yii\base\Component;
 
 /**
  * Class    Mailbox
@@ -39,6 +39,12 @@ class Mailbox extends Component
     /** @var string */
     protected $attachmentsDir;
 
+    /** @var string */
+    protected $attachmentsSubDir;
+
+    /** @var callable */
+    protected $saveFileDataHandler;
+
     /**
      * Set custom connection arguments of imap_open method. See http://php.net/imap_open
      *
@@ -53,6 +59,23 @@ class Mailbox extends Component
         $this->imapOptions = $options;
         $this->imapRetriesNum = $retriesNum;
         $this->imapParams = $params;
+    }
+
+    /**
+     * Get information about the current mailbox.
+     *
+     * Returns the information in an object with following properties:
+     *  Date - current system time formatted according to RFC2822
+     *  Driver - protocol used to access this mailbox: POP3, IMAP, NNTP
+     *  Mailbox - the mailbox name
+     *  Nmsgs - number of mails in the mailbox
+     *  Recent - number of recent mails in the mailbox
+     *
+     * @return stdClass
+     */
+    public function checkMailbox()
+    {
+        return imap_check($this->getImapStream());
     }
 
     /**
@@ -81,28 +104,6 @@ class Mailbox extends Component
     }
 
     /**
-     * @return resource
-     * @throws \tlab\imap\Exception
-     */
-    protected function initImapStream()
-    {
-        $imapStream = @imap_open(
-            $this->imapPath,
-            $this->imapLogin,
-            $this->imapPassword,
-            $this->imapOptions,
-            $this->imapRetriesNum,
-            $this->imapParams
-        );
-
-        if (!$imapStream) {
-            throw new Exception('Connection error: ' . imap_last_error());
-        }
-
-        return $imapStream;
-    }
-
-    /**
      * @return void
      */
     protected function disconnect()
@@ -115,20 +116,18 @@ class Mailbox extends Component
     }
 
     /**
-     * Get information about the current mailbox.
-     *
-     * Returns the information in an object with following properties:
-     *  Date - current system time formatted according to RFC2822
-     *  Driver - protocol used to access this mailbox: POP3, IMAP, NNTP
-     *  Mailbox - the mailbox name
-     *  Nmsgs - number of mails in the mailbox
-     *  Recent - number of recent mails in the mailbox
-     *
-     * @return stdClass
+     * @return resource
+     * @throws \tlab\imap\Exception
      */
-    public function checkMailbox()
+    protected function initImapStream()
     {
-        return imap_check($this->getImapStream());
+        $imapStream = @imap_open($this->imapPath, $this->imapLogin, $this->imapPassword, $this->imapOptions, $this->imapRetriesNum, $this->imapParams);
+
+        if (!$imapStream) {
+            throw new Exception('Connection error: ' . imap_last_error());
+        }
+
+        return $imapStream;
     }
 
     /**
@@ -262,12 +261,38 @@ class Mailbox extends Component
     }
 
     /**
+     * Causes a store to add the specified flag to the flags set for the mails in the specified sequence.
+     *
+     * @param array  $mailsIds
+     * @param string $flag which you can set are \Seen, \Answered, \Flagged, \Deleted, and \Draft as defined by RFC2060.
+     *
+     * @return bool
+     */
+    public function setFlag(array $mailsIds, $flag)
+    {
+        return imap_setflag_full($this->getImapStream(), implode(',', $mailsIds), $flag, ST_UID);
+    }
+
+    /**
      * Remove the flag \Seen from a mail.
      * @return bool
      */
     public function markMailAsUnread($mailId)
     {
         return $this->clearFlag(array($mailId), '\\Seen');
+    }
+
+    /**
+     * Cause a store to delete the specified flag to the flags set for the mails in the specified sequence.
+     *
+     * @param array  $mailsIds
+     * @param string $flag which you can set are \Seen, \Answered, \Flagged, \Deleted, and \Draft as defined by RFC2060.
+     *
+*@return bool
+     */
+    public function clearFlag(array $mailsIds, $flag)
+    {
+        return imap_clearflag_full($this->getImapStream(), implode(',', $mailsIds), $flag, ST_UID);
     }
 
     /**
@@ -304,30 +329,6 @@ class Mailbox extends Component
     public function markMailsAsImportant(array $mailId)
     {
         return $this->setFlag($mailId, '\\Flagged');
-    }
-
-    /**
-     * Causes a store to add the specified flag to the flags set for the mails in the specified sequence.
-     *
-     * @param array $mailsIds
-     * @param string $flag which you can set are \Seen, \Answered, \Flagged, \Deleted, and \Draft as defined by RFC2060.
-     * @return bool
-     */
-    public function setFlag(array $mailsIds, $flag)
-    {
-        return imap_setflag_full($this->getImapStream(), implode(',', $mailsIds), $flag, ST_UID);
-    }
-
-    /**
-     * Cause a store to delete the specified flag to the flags set for the mails in the specified sequence.
-     *
-     * @param array $mailsIds
-     * @param string $flag which you can set are \Seen, \Answered, \Flagged, \Deleted, and \Draft as defined by RFC2060.
-     * @return bool
-     */
-    public function clearFlag(array $mailsIds, $flag)
-    {
-        return imap_clearflag_full($this->getImapStream(), implode(',', $mailsIds), $flag, ST_UID);
     }
 
     /**
@@ -378,6 +379,52 @@ class Mailbox extends Component
     }
 
     /**
+     * @param string $string
+     * @param string $charset
+     *
+     * @return string
+     */
+    protected function decodeMimeStr($string, $charset = 'utf-8')
+    {
+        $newString = '';
+        $elements = imap_mime_header_decode($string);
+
+        for ($i = 0; $i < count($elements); $i++) {
+            if (isset($elements[$i]->charset) && $elements[$i]->charset == 'default') {
+                $elements[$i]->charset = 'iso-8859-1';
+            }
+
+            $newString .= $this->convertStringEncoding($elements[$i]->text, $elements[$i]->charset, $charset);
+        }
+
+        return $newString;
+    }
+
+    /**
+     * Converts a string from one encoding to another.
+     *
+     * @param string $string
+     * @param string $fromEncoding
+     * @param string $toEncoding
+     *
+     * @return string Converted string if conversion was successful, or the original string if not
+     */
+    protected function convertStringEncoding($string, $fromEncoding, $toEncoding)
+    {
+        $convertedString = null;
+
+        if ($string && $fromEncoding != $toEncoding) {
+            $convertedString = @iconv($fromEncoding, $toEncoding . '//IGNORE', $string);
+
+            if (!$convertedString && extension_loaded('mbstring')) {
+                $convertedString = @mb_convert_encoding($string, $toEncoding, $fromEncoding);
+            }
+        }
+
+        return $convertedString ?: $string;
+    }
+
+    /**
      * Get information about the current mailbox.
      *
      * Returns an object with following properties:
@@ -409,8 +456,9 @@ class Mailbox extends Component
      *  SORTCC - mailbox in first cc address
      *  SORTSIZE - size of mail in octets
      *
-     * @param int $criteria
+     * @param int  $criteria
      * @param bool $reverse
+     *
      * @return array Mails ids
      */
     public function sortMails($criteria = SORTARRIVAL, $reverse = true)
@@ -428,15 +476,6 @@ class Mailbox extends Component
     }
 
     /**
-     * Retrieve the quota settings per user
-     * @return array - FALSE in the case of call failure
-     */
-    protected function getQuota()
-    {
-        return imap_get_quotaroot($this->getImapStream(), 'INBOX');
-    }
-
-    /**
      * Return quota limit in KB
      * @return int - FALSE in the case of call failure
      */
@@ -449,6 +488,15 @@ class Mailbox extends Component
         }
 
         return $quota;
+    }
+
+    /**
+     * Retrieve the quota settings per user
+     * @return array - FALSE in the case of call failure
+     */
+    protected function getQuota()
+    {
+        return imap_get_quotaroot($this->getImapStream(), 'INBOX');
     }
 
     /**
@@ -469,7 +517,7 @@ class Mailbox extends Component
     /**
      * Get mail data
      *
-     * @param $mailId
+     * @param      $mailId
      * @param bool $markAsSeen
      * @return IncomingMail
      */
@@ -479,16 +527,9 @@ class Mailbox extends Component
 
         $mail = new IncomingMail();
         $mail->id = $mailId;
-        $mail->date = date('Y-m-d H:i:s', isset($head->date) ?
-            strtotime(preg_replace('/\(.*?\)/', '', $head->date)) :
-            time()
-        );
-        $mail->subject = isset($head->subject) ?
-            $this->decodeMimeStr($head->subject, $this->serverEncoding) :
-            null;
-        $mail->fromName = isset($head->from[0]->personal) ?
-            $this->decodeMimeStr($head->from[0]->personal, $this->serverEncoding) :
-            null;
+        $mail->date = date('Y-m-d H:i:s', isset($head->date) ? strtotime(preg_replace('/\(.*?\)/', '', $head->date)) : time());
+        $mail->subject = isset($head->subject) ? $this->decodeMimeStr($head->subject, $this->serverEncoding) : null;
+        $mail->fromName = isset($head->from[0]->personal) ? $this->decodeMimeStr($head->from[0]->personal, $this->serverEncoding) : null;
         $mail->fromAddress = strtolower($head->from[0]->mailbox . '@' . $head->from[0]->host);
         $mail->inReplyTo = isset($head->in_reply_to) ? $head->in_reply_to : null;
         $mail->messageId = $head->message_id;
@@ -511,17 +552,13 @@ class Mailbox extends Component
 
         if (isset($head->cc)) {
             foreach ($head->cc as $cc) {
-                $mail->cc[strtolower($cc->mailbox . '@' . $cc->host)] = isset($cc->personal) ?
-                    $this->decodeMimeStr($cc->personal, $this->serverEncoding) :
-                    null;
+                $mail->cc[strtolower($cc->mailbox . '@' . $cc->host)] = isset($cc->personal) ? $this->decodeMimeStr($cc->personal, $this->serverEncoding) : null;
             }
         }
 
         if (isset($head->reply_to)) {
             foreach ($head->reply_to as $replyTo) {
-                $mail->replyTo[strtolower($replyTo->mailbox . '@' . $replyTo->host)] = isset($replyTo->personal) ?
-                    $this->decodeMimeStr($replyTo->personal, $this->serverEncoding) :
-                    null;
+                $mail->replyTo[strtolower($replyTo->mailbox . '@' . $replyTo->host)] = isset($replyTo->personal) ? $this->decodeMimeStr($replyTo->personal, $this->serverEncoding) : null;
             }
         }
 
@@ -552,9 +589,7 @@ class Mailbox extends Component
             $options |= FT_PEEK;
         }
 
-        $data = $partNum ?
-            imap_fetchbody($this->getImapStream(), $mail->id, $partNum, $options) :
-            imap_body($this->getImapStream(), $mail->id, $options);
+        $data = $partNum ? imap_fetchbody($this->getImapStream(), $mail->id, $partNum, $options) : imap_body($this->getImapStream(), $mail->id, $options);
 
         if ($partStructure->encoding == 1) {
             $data = imap_utf8($data);
@@ -587,9 +622,7 @@ class Mailbox extends Component
         }
 
         // attachments
-        $attachmentId = $partStructure->ifid
-            ? trim($partStructure->id, " <>")
-            : (isset($params['filename']) || isset($params['name']) ? mt_rand() . mt_rand() : null);
+        $attachmentId = $partStructure->ifid ? trim($partStructure->id, " <>") : (isset($params['filename']) || isset($params['name']) ? mt_rand() . mt_rand() : null);
 
         if ($attachmentId) {
             if (empty($params['filename']) && empty($params['name'])) {
@@ -600,20 +633,31 @@ class Mailbox extends Component
                 $fileName = $this->decodeRFC2231($fileName, $this->serverEncoding);
             }
 
-            $attachment = new IncomingMailAttachment();
+            $attachment = new IncomingMailAttachment;
             $attachment->id = $attachmentId;
             $attachment->name = $fileName;
 
             if ($this->attachmentsDir) {
-                $replace = array(
-                    '/\s/' => '_',
-                    '/[^0-9a-zа-яіїє_\.]/iu' => '',
-                    '/_+/' => '_',
-                    '/(^_)|(_$)/' => '',
-                );
-                $fileSysName = preg_replace('~[\\\\/]~', '', $mail->id . '_' . $attachmentId . '_' . preg_replace(array_keys($replace), $replace, $fileName));
-                $attachment->filePath = $this->attachmentsDir . DIRECTORY_SEPARATOR . $fileSysName;
+                $replace = ['/\s/' => '_', '/[^0-9a-zа-яіїє_\.]/iu' => '', '/_+/' => '_', '/(^_)|(_$)/' => '',];
+
+                $attachment->extension = end(explode('.', preg_replace(array_keys($replace), $replace, $fileName)));
+                $attachment->folder = $this->attachmentsSubDir ? $this->attachmentsSubDir . DIRECTORY_SEPARATOR . $mail->id : $mail->id;
+                $attachment->size = isset($partStructure->bytes) ? $partStructure->bytes : 1024;
+                $attachment->file = preg_replace('~[\\\\/]~', '', $attachmentId) . '.' . $attachment->extension;
+                $attachment->contentType = $attachment->extension ? 'application/' . $attachment->extension : 'application/octet-stream';
+
+                $folder = $this->attachmentsDir . DIRECTORY_SEPARATOR . $attachment->folder;
+
+                if (!file_exists($folder)) {
+                    mkdir($folder);
+                }
+
+                $attachment->filePath = $folder . DIRECTORY_SEPARATOR . $attachment->file;
                 file_put_contents($attachment->filePath, $data);
+
+                if ($this->saveFileDataHandler) {
+                    call_user_func($this->saveFileDataHandler, $attachment);
+                }
             }
             $mail->addAttachment($attachment);
         } else {
@@ -649,41 +693,6 @@ class Mailbox extends Component
      *
      * @return string
      */
-    protected function decodeMimeStr($string, $charset = 'utf-8')
-    {
-        $newString = '';
-        $elements = imap_mime_header_decode($string);
-
-        for ($i = 0; $i < count($elements); $i++) {
-            if ($elements[$i]->charset == 'default') {
-                $elements[$i]->charset = 'iso-8859-1';
-            }
-
-            $newString .= $this->convertStringEncoding($elements[$i]->text, $elements[$i]->charset, $charset);
-        }
-
-        return $newString;
-    }
-
-    /**
-     * @param string $string
-     *
-     * @return bool
-     */
-    function isUrlEncoded($string)
-    {
-        $hasInvalidChars = preg_match('#[^%a-zA-Z0-9\-_\.\+]#', $string);
-        $hasEscapedChars = preg_match('#%[a-zA-Z0-9]{2}#', $string);
-
-        return !$hasInvalidChars && $hasEscapedChars;
-    }
-
-    /**
-     * @param string $string
-     * @param string $charset
-     *
-     * @return string
-     */
     protected function decodeRFC2231($string, $charset = 'utf-8')
     {
         if (preg_match("/^(.*?)'.*?'(.*?)$/", $string, $matches)) {
@@ -699,27 +708,16 @@ class Mailbox extends Component
     }
 
     /**
-     * Converts a string from one encoding to another.
-     *
      * @param string $string
-     * @param string $fromEncoding
-     * @param string $toEncoding
      *
-     * @return string Converted string if conversion was successful, or the original string if not
+     * @return bool
      */
-    protected function convertStringEncoding($string, $fromEncoding, $toEncoding)
+    function isUrlEncoded($string)
     {
-        $convertedString = null;
+        $hasInvalidChars = preg_match('#[^%a-zA-Z0-9\-_\.\+]#', $string);
+        $hasEscapedChars = preg_match('#%[a-zA-Z0-9]{2}#', $string);
 
-        if ($string && $fromEncoding != $toEncoding) {
-            $convertedString = @iconv($fromEncoding, $toEncoding . '//IGNORE', $string);
-
-            if (!$convertedString && extension_loaded('mbstring')) {
-                $convertedString = @mb_convert_encoding($string, $toEncoding, $fromEncoding);
-            }
-        }
-
-        return $convertedString ?: $string;
+        return !$hasInvalidChars && $hasEscapedChars;
     }
 
     /**
